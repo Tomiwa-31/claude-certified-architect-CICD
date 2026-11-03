@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "title": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "required": ["severity", "file", "title", "description"]
+      }
+    }
+  },
+  "required": ["summary", "findings"]
+}

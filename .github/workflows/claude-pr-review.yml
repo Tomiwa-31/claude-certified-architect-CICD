@@ -1,0 +1,56 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      GH_TOKEN: ${{ github.token }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Load prior review findings # dedup
+        run: |
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json comments --jq '[.comments[].body] | join("\n---\n")' > prior_findings.txt
+          echo "Prior comment characters: $(wc -c < prior_findings.txt)"
+
+      - name: Fetch PR diff
+        run: |
+          gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" > pr.diff
+          echo "Diff lines: $(wc -l < pr.diff)"
+
+      - name: Run Claude review # fresh session, -p flag, structured output
+        run: |
+          PRIOR=$(cat prior_findings.txt)
+          # Diff is piped on stdin; CLAUDE.md is loaded automatically from the checkout
+          claude -p "Review the pull request diff provided on stdin. Existing issues already raised in PR comments (skip these): ${PRIOR:-none}" \
+            --output-format json \
+            --json-schema "$(cat .claude/review_schema.json)" \
+            < pr.diff > result.json
+          jq '.structured_output' result.json > findings.json
+          echo "::group::Findings"
+          cat findings.json
+          echo "::endgroup::"
+
+      - name: Block merge on critical findings
+        run: |
+          CRITICAL=$(jq '.findings | map(select(.severity=="critical")) | length' findings.json)
+          echo "Critical findings: $CRITICAL"
+          [ "$CRITICAL" -eq 0 ] || { echo "::error::$CRITICAL critical finding(s) - blocking merge"; exit 1; }
