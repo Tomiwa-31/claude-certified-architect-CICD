@@ -14,16 +14,26 @@ permissions:
 
 jobs:
   review:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
       GH_TOKEN: ${{ github.token }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      - name: Check ANTHROPIC_API_KEY secret is configured
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set. Add it in the repo: Settings > Secrets and variables > Actions > New repository secret."
+            exit 1
+          fi
+          echo "ANTHROPIC_API_KEY is present (length ${#ANTHROPIC_API_KEY})"
 
       - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
 
       - name: Load prior review findings # dedup
         run: |
@@ -40,10 +50,21 @@ jobs:
         run: |
           PRIOR=$(cat prior_findings.txt)
           # Diff is piped on stdin; CLAUDE.md is loaded automatically from the checkout
+          set +e
           claude -p "Review the pull request diff provided on stdin. Existing issues already raised in PR comments (skip these): ${PRIOR:-none}" \
             --output-format json \
             --json-schema "$(cat .claude/review_schema.json)" \
             < pr.diff > result.json
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ] || [ "$(jq -r '.is_error // false' result.json 2>/dev/null)" = "true" ]; then
+            echo "::group::Raw CLI output"
+            cat result.json || true
+            echo "::endgroup::"
+            MSG=$(jq -r '.result // "no result field"' result.json 2>/dev/null || echo "output was not JSON")
+            echo "::error::Claude CLI failed (exit code $STATUS): $MSG"
+            exit 1
+          fi
           jq '.structured_output' result.json > findings.json
           echo "::group::Findings"
           cat findings.json
