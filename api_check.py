@@ -13,3 +13,10 @@ response = client.messages.create(
 )
 
 print(response.content[0].text)  # Should print: Hello
+
+def safe_divide(a, b):
+    """Teaching example used to exercise the Claude PR Review workflow."""
+    try:
+        return a / b
+    except Exception:
+        return None
